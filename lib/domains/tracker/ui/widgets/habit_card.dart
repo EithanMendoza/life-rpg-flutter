@@ -1,20 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importa Riverpod
 import '../../../../core/theme/app_colors.dart';
+import '../../providers/tracker_provider.dart'; // Importa tu provider
 
-class HabitCard extends StatelessWidget {
+class HabitCard extends ConsumerWidget {
+  // 2. Cambiado a ConsumerWidget
+  final String id; // Nuevo: ID único del hábito para referencia
   final String title;
   final int baseXp;
   final bool isCompleted;
 
   const HabitCard({
     super.key,
+    required this.id,
     required this.title,
     required this.baseXp,
     this.isCompleted = false,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 3. Añadimos WidgetRef ref
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
@@ -30,28 +36,43 @@ class HabitCard extends StatelessWidget {
 
         // Elemento interactivo visual (Simulación de Checkbox)
         leading: InkWell(
-          onTap: () {
-            // TODO: Aquí emitiremos el evento al CoreTrackerProvider (Riverpod)
+          onTap: () async {
+            if (isCompleted) return;
+
+            final int timezoneOffset = DateTime.now().timeZoneOffset.inMinutes;
+
+            await ref
+                .read(trackerControllerProvider.notifier)
+                .registerAction(
+                  userId: 'local_user',
+                  actionType: 'habit_completed:$id',
+                  timezoneOffset: timezoneOffset,
+                );
+
+            ref.invalidate(habitsProvider('local_user'));
           },
           borderRadius: BorderRadius.circular(24),
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isCompleted
+                      ? AppColors.primary
+                      : AppColors.textSecondary,
+                  width: 2,
+                ),
                 color: isCompleted
-                    ? AppColors.primary
-                    : AppColors.textSecondary,
-                width: 2,
+                    ? AppColors.primary.withOpacity(0.2)
+                    : Colors.transparent,
               ),
-              color: isCompleted
-                  ? AppColors.primary.withOpacity(0.2)
-                  : Colors.transparent,
+              child: isCompleted
+                  ? const Icon(Icons.check, size: 18, color: AppColors.primary)
+                  : null,
             ),
-            child: isCompleted
-                ? const Icon(Icons.check, size: 18, color: AppColors.primary)
-                : null,
           ),
         ),
 
@@ -79,7 +100,6 @@ class HabitCard extends StatelessWidget {
           child: Text(
             '+$baseXp XP',
             style: TextStyle(
-              // Usamos el warning (naranja) si no está completado para llamar la atención
               color: isCompleted ? AppColors.primary : AppColors.warning,
               fontWeight: FontWeight.bold,
               fontSize: 12,

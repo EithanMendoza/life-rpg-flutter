@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../domains/tracker/ui/tracker_screen.dart';
+import '../../domains/gamification/ui/gamification_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -15,12 +16,7 @@ class _AppShellState extends State<AppShell> {
   final List<Widget> _screens = const [
     TrackerScreen(), // <- La pantalla real del dominio de hábitos
     // Dejamos los demás placeholders intactos para el siguiente Sprint
-    Center(
-      child: Text(
-        'Pantalla de Recompensas\n(Ej: Tiempo para Xbox)',
-        textAlign: TextAlign.center,
-      ),
-    ),
+    GamificationScreen(), // <- La pantalla real del dominio de gamificación
     Center(
       child: Text(
         'Pantalla de Perfil\n(Auth & Settings)',

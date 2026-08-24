@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importa Riverpod
 import 'core/theme/app_theme.dart';
-import 'core/ui/app_shell.dart';
+import 'domains/auth/ui/onboarding_screen.dart';
 
 void main() {
-  runApp(const LifeRpgApp());
+  runApp(
+    const ProviderScope(
+      // 2. Envuelve la aplicación aquí
+      child: LifeRpgApp(),
+    ),
+  );
 }
 
 class LifeRpgApp extends StatelessWidget {
@@ -15,8 +21,7 @@ class LifeRpgApp extends StatelessWidget {
       title: 'Life RPG',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      // Conectamos el gestor de navegación principal
-      home: const AppShell(),
+      home: const OnboardingScreen(),
     );
   }
 }
