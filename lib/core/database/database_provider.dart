@@ -21,9 +21,10 @@ class DatabaseProvider {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 3,
       onConfigure: _onConfigure,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -45,7 +46,15 @@ class DatabaseProvider {
         title TEXT NOT NULL,
         base_xp INTEGER NOT NULL DEFAULT 10,
         is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        habit_type TEXT NOT NULL DEFAULT 'standard',
+        anchor_event TEXT,
+        recurrence_pattern TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+        is_recovery INTEGER NOT NULL DEFAULT 0,
+        trigger_type TEXT NOT NULL DEFAULT 'event',
+        trigger_time TEXT,
+        duration_minutes INTEGER,
+        priority_level TEXT NOT NULL DEFAULT 'medium'
       )
     ''');
 
@@ -78,5 +87,36 @@ class DatabaseProvider {
 
     // Nota de Arquitectura: La tabla 'users' o 'shadow_accounts' la manejaremos
     // en un script de inicialización independiente para mantener la separación de responsabilidades.
+  }
+
+  // Implementa la migración segura
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // Migración de Fase 1.5
+    if (oldVersion < 2) {
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN habit_type TEXT NOT NULL DEFAULT 'standard';",
+      );
+      await db.execute("ALTER TABLE habits ADD COLUMN anchor_event TEXT;");
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN recurrence_pattern TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7';",
+      );
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN is_recovery INTEGER NOT NULL DEFAULT 0;",
+      );
+    }
+
+    // Migración actual: Gatillos Híbridos y Prioridad
+    if (oldVersion < 3) {
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'event';",
+      );
+      await db.execute("ALTER TABLE habits ADD COLUMN trigger_time TEXT;");
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN duration_minutes INTEGER;",
+      );
+      await db.execute(
+        "ALTER TABLE habits ADD COLUMN priority_level TEXT NOT NULL DEFAULT 'medium';",
+      );
+    }
   }
 }

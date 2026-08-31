@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../providers/tracker_provider.dart'; // Ajusta la ruta si tu archivo de providers está en otra carpeta
+import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importamos Riverpod
 import 'widgets/habit_card.dart';
-import 'widgets/habit_bottom_sheet.dart';
 import 'widgets/if_then_bottom_sheet.dart';
+import '../providers/tracker_provider.dart';
+import 'habit_creation_screen.dart';
+import '../models/habit.dart'; // Para convertir el Map en Objeto
+import '../ui/widgets/flow_timer_screen.dart'; // La nueva pantalla del cronómetro
 
+// 2. Cambiamos StatefulWidget por ConsumerStatefulWidget
 class TrackerScreen extends ConsumerStatefulWidget {
   const TrackerScreen({super.key});
 
@@ -14,15 +17,11 @@ class TrackerScreen extends ConsumerStatefulWidget {
 
 class _TrackerScreenState extends ConsumerState<TrackerScreen> {
   void _showAddHabitSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => const HabitBottomSheet(),
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const HabitCreationScreen()),
     );
   }
 
-  // Método para invocar el BottomSheet de If-Then
   void _showIfThenSheet() {
     showModalBottomSheet(
       context: context,
@@ -34,20 +33,24 @@ class _TrackerScreenState extends ConsumerState<TrackerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Observamos el provider de hábitos para reactividad automática en tiempo real
-    const currentUserId = 'local_user';
-    final habitsAsync = ref.watch(habitsProvider(currentUserId));
+    // 3. Magia Reactiva: Escuchamos la base de datos a través de Riverpod
+    final habitsAsyncValue = ref.watch(habitsProvider('shadow-account-id'));
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: habitsAsync.when(
+
+      // 4. Manejamos los 3 estados posibles de una consulta asíncrona (Cargando, Error, Datos)
+      body: habitsAsyncValue.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, stackTrace) =>
+            Center(child: Text('Error al cargar SQLite: $error')),
         data: (habits) {
           if (habits.isEmpty) {
             return const Center(
               child: Text(
-                'No hay hábitos aún. ¡Crea el primero con el botón +!',
-                style: TextStyle(color: Colors.white70, fontSize: 14),
+                'Tu lista está vacía.\n¡Apila tu primer hábito!',
                 textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 16),
               ),
             );
           }
@@ -56,40 +59,38 @@ class _TrackerScreenState extends ConsumerState<TrackerScreen> {
             padding: const EdgeInsets.only(top: 16, bottom: 140),
             itemCount: habits.length,
             itemBuilder: (context, index) {
-              final habit = habits[index];
+              final habitMap = habits[index];
 
-              // 🛡️ Casteo seguro para evitar errores de tipo si SQLite devuelve null o num
-              final int completedCount =
-                  (habit['completed_count'] as num?)?.toInt() ?? 0;
-              final bool isCompleted = completedCount > 0;
-
-              return HabitCard(
-                id: habit['id'] as String,
-                title: habit['title'] as String,
-                baseXp: habit['base_xp'] as int,
-                isCompleted:
-                    isCompleted, // <-- Aquí pasamos el estado real de SQLite
+              return InkWell(
+                onTap: () {
+                  final habitObj = Habit.fromMap(habitMap);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => FlowTimerScreen(habit: habitObj),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: HabitCard(
+                  title: habitMap['title'] ?? 'Sin título',
+                  baseXp: habitMap['base_xp'] ?? 10,
+                  isCompleted: (habitMap['completed_count'] ?? 0) > 0,
+                  id: '${habitMap['id']}',
+                  syncStatus: habitMap['current_sync_status'] as String?,
+                  clientTimestamp: habitMap['log_timestamp'] as String?,
+                ),
               );
             },
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (err, stack) => Center(
-          child: Text(
-            'Error al cargar hábitos: $err',
-            style: const TextStyle(color: Colors.redAccent),
-          ),
-        ),
       ),
 
-      // Reestructuramos el área de acción con una columna de FABs
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Botón secundario (Misiones If-Then)
           FloatingActionButton.small(
-            heroTag: 'if_then_fab', // Evita conflictos de animación en Flutter
+            heroTag: 'if_then_fab',
             onPressed: _showIfThenSheet,
             backgroundColor: Theme.of(context).colorScheme.surface,
             foregroundColor: Theme.of(context).colorScheme.primary,
@@ -97,7 +98,6 @@ class _TrackerScreenState extends ConsumerState<TrackerScreen> {
             child: const Icon(Icons.shield_outlined),
           ),
           const SizedBox(height: 16),
-          // Botón principal (Nuevos Hábitos)
           FloatingActionButton(
             heroTag: 'habit_fab',
             onPressed: _showAddHabitSheet,

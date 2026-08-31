@@ -1,14 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importa Riverpod
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../providers/tracker_provider.dart'; // Importa tu provider
+import '../../providers/tracker_provider.dart';
 
-class HabitCard extends ConsumerWidget {
-  // 2. Cambiado a ConsumerWidget
-  final String id; // Nuevo: ID único del hábito para referencia
+class HabitCard extends ConsumerStatefulWidget {
+  final String id;
   final String title;
   final int baseXp;
   final bool isCompleted;
+  final String? syncStatus; // NUEVO: Extraído del repositorio
+  final String? clientTimestamp; // NUEVO: Para calcular el OOM Killer delta
 
   const HabitCard({
     super.key,
@@ -16,96 +18,259 @@ class HabitCard extends ConsumerWidget {
     required this.title,
     required this.baseXp,
     this.isCompleted = false,
+    this.syncStatus,
+    this.clientTimestamp,
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // 3. Añadimos WidgetRef ref
+  ConsumerState<HabitCard> createState() => _HabitCardState();
+}
+
+class _HabitCardState extends ConsumerState<HabitCard> {
+  Timer? _timer;
+  int _remainingSeconds = 0;
+  static const int _undoWindowSeconds = 900; // 15 minutos exactos
+
+  @override
+  void initState() {
+    super.initState();
+    _checkUndoStatus();
+  }
+
+  @override
+  void didUpdateWidget(HabitCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.syncStatus != oldWidget.syncStatus ||
+        widget.clientTimestamp != oldWidget.clientTimestamp) {
+      _checkUndoStatus();
+    }
+  }
+
+  void _checkUndoStatus() {
+    _timer?.cancel();
+    if (widget.syncStatus == 'pending_undo' && widget.clientTimestamp != null) {
+      final logTime = DateTime.parse(widget.clientTimestamp!).toLocal();
+      final now = DateTime.now();
+      final elapsed = now.difference(logTime).inSeconds;
+      final remaining = _undoWindowSeconds - elapsed;
+
+      if (remaining > 0) {
+        setState(() {
+          _remainingSeconds = remaining;
+        });
+        _startTimer();
+      } else {
+        // CORRECCIÓN: Postergamos la mutación del estado hasta que el widget termine de construirse
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _finalizeCommit();
+        });
+      }
+    } else {
+      setState(() {
+        _remainingSeconds = 0;
+      });
+    }
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds > 0) {
+        setState(() {
+          _remainingSeconds--;
+        });
+      } else {
+        _timer?.cancel();
+        _finalizeCommit();
+      }
+    });
+  }
+
+  Future<void> _finalizeCommit() async {
+    // Llama al repositorio para actualizar el estado a 'pending' o 'synced'
+    await ref
+        .read(trackerControllerProvider.notifier)
+        .commitAction(habitId: widget.id);
+    ref.invalidate(habitsProvider('local_user'));
+  }
+
+  Future<void> _undoAction() async {
+    _timer?.cancel();
+    // Ejecuta el borrado físico en SQLite
+    await ref
+        .read(trackerControllerProvider.notifier)
+        .undoAction(habitId: widget.id);
+    ref.invalidate(habitsProvider('local_user'));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String get _formattedTime {
+    final minutes = (_remainingSeconds / 60).floor();
+    final seconds = _remainingSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isPendingUndo = widget.syncStatus == 'pending_undo';
+    final bool isFullyCompleted = widget.isCompleted && !isPendingUndo;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        // Si está completado, añadimos un borde sutil color éxito
-        border: isCompleted
-            ? Border.all(color: AppColors.primary.withOpacity(0.5), width: 1.5)
-            : Border.all(color: Colors.transparent, width: 1.5),
+        border: Border.all(
+          color: isPendingUndo
+              ? AppColors.warning.withOpacity(
+                  0.5,
+                ) // Borde amarillo para Soft-Commit
+              : isFullyCompleted
+              ? AppColors.primary.withOpacity(
+                  0.5,
+                ) // Borde verde para definitivo
+              : Colors.transparent,
+          width: 1.5,
+        ),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        children: [
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 8,
+            ),
+            leading: InkWell(
+              onTap: () async {
+                if (widget.isCompleted || isPendingUndo) return;
 
-        // Elemento interactivo visual (Simulación de Checkbox)
-        leading: InkWell(
-          onTap: () async {
-            if (isCompleted) return;
+                final int timezoneOffset =
+                    DateTime.now().timeZoneOffset.inMinutes;
 
-            final int timezoneOffset = DateTime.now().timeZoneOffset.inMinutes;
+                await ref
+                    .read(trackerControllerProvider.notifier)
+                    .registerAction(
+                      userId: 'shadow-account-id',
+                      actionType: 'habit_completed:${widget.id}',
+                      timezoneOffset: timezoneOffset,
+                    );
 
-            await ref
-                .read(trackerControllerProvider.notifier)
-                .registerAction(
-                  userId: 'local_user',
-                  actionType: 'habit_completed:$id',
-                  timezoneOffset: timezoneOffset,
-                );
-
-            ref.invalidate(habitsProvider('local_user'));
-          },
-          borderRadius: BorderRadius.circular(24),
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: isCompleted
-                      ? AppColors.primary
-                      : AppColors.textSecondary,
-                  width: 2,
+                ref.invalidate(habitsProvider('shadow-account-id'));
+              },
+              borderRadius: BorderRadius.circular(24),
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isPendingUndo
+                          ? AppColors.warning
+                          : isFullyCompleted
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                      width: 2,
+                    ),
+                    color: isPendingUndo
+                        ? AppColors.warning.withOpacity(0.2)
+                        : isFullyCompleted
+                        ? AppColors.primary.withOpacity(0.2)
+                        : Colors.transparent,
+                  ),
+                  child: isPendingUndo
+                      ? const Icon(
+                          Icons.access_time,
+                          size: 18,
+                          color: AppColors.warning,
+                        )
+                      : isFullyCompleted
+                      ? const Icon(
+                          Icons.check,
+                          size: 18,
+                          color: AppColors.primary,
+                        )
+                      : null,
                 ),
-                color: isCompleted
-                    ? AppColors.primary.withOpacity(0.2)
-                    : Colors.transparent,
               ),
-              child: isCompleted
-                  ? const Icon(Icons.check, size: 18, color: AppColors.primary)
-                  : null,
+            ),
+            title: Text(
+              widget.title,
+              style: TextStyle(
+                color: widget.isCompleted
+                    ? AppColors.textSecondary
+                    : AppColors.textPrimary,
+                decoration: widget.isCompleted
+                    ? TextDecoration.lineThrough
+                    : null,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: isPendingUndo
+                    ? AppColors.warning.withOpacity(0.1)
+                    : isFullyCompleted
+                    ? AppColors.primary.withOpacity(0.1)
+                    : AppColors.background,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                '+${widget.baseXp} XP',
+                style: TextStyle(
+                  color: isPendingUndo
+                      ? AppColors.warning
+                      : isFullyCompleted
+                      ? AppColors.primary
+                      : AppColors.warning,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
             ),
           ),
-        ),
 
-        // Título del Hábito
-        title: Text(
-          title,
-          style: TextStyle(
-            color: isCompleted
-                ? AppColors.textSecondary
-                : AppColors.textPrimary,
-            decoration: isCompleted ? TextDecoration.lineThrough : null,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-
-        // Insignia de Recompensa (XP)
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: isCompleted
-                ? AppColors.primary.withOpacity(0.1)
-                : AppColors.background,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            '+$baseXp XP',
-            style: TextStyle(
-              color: isCompleted ? AppColors.primary : AppColors.warning,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
+          // BARRA INFERIOR DE DESHACER (Visible solo en Soft-Commit)
+          if (isPendingUndo)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withOpacity(0.05),
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(12),
+                  bottomRight: Radius.circular(12),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Guardando en $_formattedTime',
+                    style: const TextStyle(
+                      color: AppColors.warning,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _undoAction,
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.error,
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(60, 30),
+                    ),
+                    child: const Text('Deshacer'),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+        ],
       ),
     );
   }

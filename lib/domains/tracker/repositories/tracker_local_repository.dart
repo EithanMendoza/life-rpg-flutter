@@ -1,62 +1,82 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/database/database_provider.dart';
+import '../models/habit.dart';
 
 class TrackerLocalRepository {
   const TrackerLocalRepository();
 
-  /// 1. Guardar un nuevo hábito (Lead Measure)
-  /// Realiza una inserción directa y segura en la tabla local 'habits'.
-  Future<void> insertHabit(String userId, String title) async {
+  Future<void> insertHabit(Habit habit) async {
     final db = await DatabaseProvider.db.database;
-    const uuid = Uuid();
-    final habitId = uuid.v4();
-
-    await db.insert('habits', {
-      'id': habitId,
-      'user_id': userId,
-      'title': title,
-      'base_xp': 10,
-      'is_active': 1,
-      'created_at': DateTime.now().toIso8601String(),
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert(
+      'habits',
+      habit.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
-  Future<List<Map<String, dynamic>>> getHabits(String userId) async {
+  Future<List<Habit>> getHabits() async {
+    final db = await DatabaseProvider.db.database;
+    final List<Map<String, dynamic>> maps = await db.query('habits');
+    return List.generate(maps.length, (i) => Habit.fromMap(maps[i]));
+  }
+
+  Future<List<Habit>> getAllHabits() async {
+    final db = await DatabaseProvider.db.database;
+    final List<Map<String, dynamic>> maps = await db.query('habits');
+    return List.generate(maps.length, (i) => Habit.fromMap(maps[i]));
+  }
+
+  /// Obtiene los hábitos del día.
+  /// Utiliza subconsultas para garantizar EXACTAMENTE 1 fila por hábito,
+  /// extrayendo solo el último registro del action_log para el temporizador.
+  Future<List<Map<String, dynamic>>> getDailyHabits(String userId) async {
     final db = await DatabaseProvider.db.database;
 
-    // 1. Obtenemos la fecha local de hoy en formato 'YYYY-MM-DD'
-    final todayStr = DateTime.now().toIso8601String().substring(0, 10);
-
-    // 2. Usamos date(..., 'localtime') para que SQLite compare contra la fecha local real
     final List<Map<String, dynamic>> results = await db.rawQuery(
       '''
-    SELECT 
-      h.id, 
-      h.user_id, 
-      h.title, 
-      h.base_xp, 
-      h.is_active, 
-      h.created_at,
-      (
-        SELECT COUNT(1) 
-        FROM action_logs al 
-        WHERE al.action_type = 'habit_completed:' || h.id 
-          AND date(al.client_timestamp, 'localtime') = ?
-      ) as completed_count
-    FROM habits h
-    WHERE h.user_id = ? AND h.is_active = 1
-    ORDER BY h.created_at DESC
-  ''',
-      [todayStr, userId],
+      SELECT 
+        h.*,
+        
+        -- 1. Recuperamos el conteo total para saber si ya se completó hoy
+        (
+          SELECT COUNT(1) 
+          FROM action_logs al 
+          WHERE al.action_type = 'habit_completed:' || h.id 
+            AND date(al.client_timestamp, 'localtime') = date('now', 'localtime')
+        ) as completed_count,
+        
+        -- 2. Recuperamos el estado de sincronización del ÚLTIMO registro
+        (
+          SELECT al.sync_status 
+          FROM action_logs al 
+          WHERE al.action_type = 'habit_completed:' || h.id 
+            AND date(al.client_timestamp, 'localtime') = date('now', 'localtime')
+          ORDER BY al.client_timestamp DESC 
+          LIMIT 1
+        ) as current_sync_status,
+        
+        -- 3. Recuperamos el timestamp del ÚLTIMO registro para el cronómetro OOM Killer
+        (
+          SELECT al.client_timestamp 
+          FROM action_logs al 
+          WHERE al.action_type = 'habit_completed:' || h.id 
+            AND date(al.client_timestamp, 'localtime') = date('now', 'localtime')
+          ORDER BY al.client_timestamp DESC 
+          LIMIT 1
+        ) as log_timestamp
+        
+      FROM habits h
+      WHERE h.user_id = ? AND h.is_active = 1
+      ORDER BY h.created_at DESC
+    ''',
+      [userId],
     );
 
     return results;
   }
 
-  /// 2. Registrar acción completada (Acción inmutable para la tabla action_logs)
-  /// ADVERTENCIA PM: Esta inserción es síncrona al disco local y sirve como base
-  /// para que posteriormente el Patrón Observador de Gamificación procese la recompensa.
+  /// REFACTOR: El registro inicial entra como 'pending_undo' (Soft-Commit)
   Future<void> logAction({
     required String userId,
     required String actionType,
@@ -72,10 +92,32 @@ class TrackerLocalRepository {
       'action_type': actionType,
       'client_timestamp': DateTime.now().toUtc().toIso8601String(),
       'executed_timezone_offset': timezoneOffset,
-      'xp_rewarded': 10, // Recompensa base temporal
+      'xp_rewarded': 10,
       'escrow_xp': 0,
-      'sync_status':
-          'pending', // Pendiente de sincronizar con el servidor Node.js
+      'sync_status': 'pending_undo', // Estado transitorio para reversibilidad
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// NUEVO: Confirma la acción después de 15 minutos
+  Future<void> commitAction(String habitId) async {
+    final db = await DatabaseProvider.db.database;
+    await db.rawUpdate(
+      '''
+      UPDATE action_logs 
+      SET sync_status = 'pending' 
+      WHERE action_type = ? AND sync_status = 'pending_undo'
+      ''',
+      ['habit_completed:$habitId'],
+    );
+  }
+
+  /// NUEVO: Borrado físico si el usuario presiona "Deshacer"
+  Future<void> undoAction(String habitId) async {
+    final db = await DatabaseProvider.db.database;
+    await db.delete(
+      'action_logs',
+      where: 'action_type = ? AND sync_status = ?',
+      whereArgs: ['habit_completed:$habitId', 'pending_undo'],
+    );
   }
 }
