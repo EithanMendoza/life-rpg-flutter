@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../domains/tracker/ui/tracker_screen.dart';
+import '../../domains/tracker/ui/screens/tracker_screen.dart';
 import '../../domains/gamification/ui/gamification_screen.dart';
 
 class AppShell extends StatefulWidget {

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importamos Riverpod
-import 'widgets/habit_card.dart';
-import 'widgets/if_then_bottom_sheet.dart';
-import '../providers/tracker_provider.dart';
+import '../widgets/habit_card.dart';
+import '../widgets/if_then_bottom_sheet.dart';
+import '../../providers/tracker_provider.dart';
 import 'habit_creation_screen.dart';
-import '../models/habit.dart'; // Para convertir el Map en Objeto
-import '../ui/widgets/flow_timer_screen.dart'; // La nueva pantalla del cronómetro
+import '../../models/habit.dart'; // Para convertir el Map en Objeto
+import '../widgets/flow_timer_screen.dart'; // La nueva pantalla del cronómetro
 
 // 2. Cambiamos StatefulWidget por ConsumerStatefulWidget
 class TrackerScreen extends ConsumerStatefulWidget {

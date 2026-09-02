@@ -1,5 +1,5 @@
 import 'package:sqflite/sqflite.dart';
-import 'package:uuid/uuid.dart';
+
 import '../../../core/database/database_provider.dart';
 import '../models/habit.dart';
 
@@ -76,25 +76,27 @@ class TrackerLocalRepository {
     return results;
   }
 
-  /// REFACTOR: El registro inicial entra como 'pending_undo' (Soft-Commit)
-  Future<void> logAction({
+  /// Repositorio purgado de responsabilidades lógicas. Solo acepta y persiste.
+  Future<void> insertActionLog({
+    required String logId,
     required String userId,
     required String actionType,
-    required int timezoneOffset,
+    required String clientTimestamp,
+    required int executedTimezoneOffset,
+    required int xpRewarded,
+    required int escrowXp,
+    required String syncStatus,
   }) async {
     final db = await DatabaseProvider.db.database;
-    const uuid = Uuid();
-    final logId = uuid.v4();
-
     await db.insert('action_logs', {
       'id': logId,
       'user_id': userId,
       'action_type': actionType,
-      'client_timestamp': DateTime.now().toUtc().toIso8601String(),
-      'executed_timezone_offset': timezoneOffset,
-      'xp_rewarded': 10,
-      'escrow_xp': 0,
-      'sync_status': 'pending_undo', // Estado transitorio para reversibilidad
+      'client_timestamp': clientTimestamp,
+      'executed_timezone_offset': executedTimezoneOffset,
+      'xp_rewarded': xpRewarded,
+      'escrow_xp': escrowXp,
+      'sync_status': syncStatus,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'; // 1. Importa Riverpod
 import 'core/theme/app_theme.dart';
-import 'domains/auth/ui/onboarding_screen.dart';
+import 'domains/auth/ui/screens/onboarding_screen.dart';
 
 void main() {
   runApp(
