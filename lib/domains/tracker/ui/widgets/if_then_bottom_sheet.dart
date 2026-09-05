@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
-// Importación exclusiva del sistema transversal (Core). ADR-002 respetado.
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/providers/session_provider.dart'; // Tu provider de sesión real
+import '../../providers/shadow_account_provider.dart'; // Mantenemos este para leer la vulnerabilidad
+import '../../providers/tracker_provider.dart';
+import '../../providers/day_zero_provider.dart';
 
-class IfThenBottomSheet extends StatefulWidget {
-  const IfThenBottomSheet({super.key});
+class IfThenBottomSheet extends ConsumerStatefulWidget {
+  final String? tutorialStepIdToRemove;
+
+  const IfThenBottomSheet({super.key, this.tutorialStepIdToRemove});
 
   @override
-  State<IfThenBottomSheet> createState() => _IfThenBottomSheetState();
+  ConsumerState<IfThenBottomSheet> createState() => _IfThenBottomSheetState();
 }
 
-class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
+class _IfThenBottomSheetState extends ConsumerState<IfThenBottomSheet> {
   final TextEditingController _triggerController = TextEditingController();
   final TextEditingController _responseController = TextEditingController();
   final FocusNode _responseFocusNode = FocusNode();
+  bool _isSaving = false;
 
   @override
   void dispose() {
@@ -22,10 +29,64 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
     super.dispose();
   }
 
+  Future<void> _save() async {
+    final trigger = _triggerController.text.trim();
+    final response = _responseController.text.trim();
+
+    if (trigger.isEmpty || response.isEmpty) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      // 1. Obtenemos el ID real del usuario
+      final userId = ref.read(localUserIdProvider).value;
+      if (userId == null) throw Exception("Sesión no encontrada");
+
+      // 2. Guardamos la misión usando la Arquitectura Limpia
+      await ref
+          .read(trackerUseCasesProvider)
+          .createIfThenMission(
+            userId: userId,
+            trigger: trigger,
+            response: response,
+          );
+
+      // 3. Completamos la Tarea de Iniciación (Día Cero)
+      if (widget.tutorialStepIdToRemove != null) {
+        await ref
+            .read(trackerUseCasesProvider)
+            .completeTutorialStep(widget.tutorialStepIdToRemove!);
+        ref.invalidate(dayZeroProvider);
+      }
+
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _isSaving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al guardar: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Calculamos el tamaño del teclado para desplazar el BottomSheet
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    // Pre-llenado inteligente de la vulnerabilidad
+    final userAsync = ref.watch(shadowAccountProvider);
+    userAsync.whenData((user) {
+      if (_triggerController.text.isEmpty &&
+          user != null &&
+          user['primary_vulnerability'] != null) {
+        _triggerController.text =
+            'Siento el impulso de ${user['primary_vulnerability']}';
+      }
+    });
 
     return Container(
       color: AppColors.surface,
@@ -54,7 +115,6 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
           ),
           const SizedBox(height: 24),
 
-          // 1. Desencadenante (If) - Se asocia con un estado de alerta o advertencia
           TextField(
             controller: _triggerController,
             style: const TextStyle(color: AppColors.textPrimary),
@@ -62,7 +122,6 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
               labelText: 'Si... (Desencadenante)',
               labelStyle: const TextStyle(color: AppColors.warning),
               hintText: 'Ej. Siento el impulso de revisar redes',
-              hintStyle: const TextStyle(color: AppColors.textSecondary),
               filled: true,
               fillColor: AppColors.background,
               prefixIcon: const Icon(
@@ -83,15 +142,12 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            autofocus: true,
+            autofocus: widget.tutorialStepIdToRemove == null,
             textInputAction: TextInputAction.next,
-            onSubmitted: (_) {
-              // Transición fluida del foco sin requerir toques en la pantalla
-              FocusScope.of(context).requestFocus(_responseFocusNode);
-            },
+            onSubmitted: (_) =>
+                FocusScope.of(context).requestFocus(_responseFocusNode),
           ),
 
-          // Conector Visual (Ergonomía UI)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 8.0),
             child: Center(
@@ -99,7 +155,6 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
             ),
           ),
 
-          // 2. Respuesta (Then) - Se asocia con la resolución y el éxito
           TextField(
             controller: _responseController,
             focusNode: _responseFocusNode,
@@ -108,7 +163,6 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
               labelText: 'Entonces... (Acción)',
               labelStyle: const TextStyle(color: AppColors.primary),
               hintText: 'Ej. Haré 10 flexiones de inmediato',
-              hintStyle: const TextStyle(color: AppColors.textSecondary),
               filled: true,
               fillColor: AppColors.background,
               prefixIcon: const Icon(
@@ -130,15 +184,11 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
               ),
             ),
             textInputAction: TextInputAction.done,
-            onSubmitted: (_) {
-              // Fricción cero: Permitimos guardar presionando Enter (Done) en el teclado
-              Navigator.of(context).pop();
-            },
+            onSubmitted: (_) => _save(),
           ),
 
           const SizedBox(height: 32),
 
-          // 3. Botón de Acción Principal (Resolución Offline-First)
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -146,19 +196,25 @@ class _IfThenBottomSheetState extends State<IfThenBottomSheet> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: AppColors.background,
-                elevation: 0, // ADR-001: Sin sombras de procesamiento o red
+                elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              onPressed: () {
-                // TODO: Fase 2 - Inserción WAL en tabla if_then_missions
-                Navigator.of(context).pop();
-              },
-              child: const Text(
-                'Blindar Hábito',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
+              onPressed: _isSaving ? null : _save,
+              child: _isSaving
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text(
+                      'Blindar Hábito',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
             ),
           ),
         ],

@@ -2,8 +2,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 class DatabaseProvider {
-  // Patrón Singleton para garantizar una única conexión viva a la base de datos
-  // y evitar bloqueos de archivo (File Locks) en SQLite.
+  // Patrón Singleton: Única fuente de verdad para la conexión SQLite
   DatabaseProvider._();
   static final DatabaseProvider db = DatabaseProvider._();
 
@@ -21,24 +20,40 @@ class DatabaseProvider {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4, // Subimos a V4 para consolidar la tabla users de forma segura
       onConfigure: _onConfigure,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
   }
 
-  // ADVERTENCIA PM (ADR-001): Configuración de bajo nivel de SQLite
+  // Configuración de bajo nivel de SQLite
   Future<void> _onConfigure(Database db) async {
-    // Al devolver resultados, PRAGMA requiere obligatoriamente rawQuery en sqflite
     await db.rawQuery('PRAGMA journal_mode=WAL;');
-
-    // Activamos el soporte de llaves foráneas.
     await db.rawQuery('PRAGMA foreign_keys = ON;');
   }
 
+  // El Mapa Topológico Real: Aquí nacen TODAS las tablas de la app
   Future<void> _onCreate(Database db, int version) async {
-    // 1. Tabla: habits (Acciones recurrentes de baja fricción)
+    // --- DOMINIO: AUTH ---
+    await db.execute('''
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        oauth_id TEXT UNIQUE,
+        xp INTEGER NOT NULL DEFAULT 0,
+        gold_balance INTEGER NOT NULL DEFAULT 0,
+        day_start_time TEXT NOT NULL DEFAULT '00:00:00',
+        target_sleep_time TEXT NOT NULL DEFAULT '23:00:00',
+        archetype TEXT,
+        primary_vulnerability TEXT,
+        account_status TEXT NOT NULL DEFAULT 'active',
+        shields INTEGER NOT NULL DEFAULT 0,
+        is_sleep_mode_active INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT
+      )
+    ''');
+
+    // --- DOMINIO: TRACKER ---
     await db.execute('''
       CREATE TABLE habits (
         id TEXT PRIMARY KEY,
@@ -58,9 +73,6 @@ class DatabaseProvider {
       )
     ''');
 
-    // 2. Tabla: action_logs (El historial inmutable y base del Escrow XP)
-    // ADVERTENCIA PM: client_timestamp y executed_timezone_offset son obligatorios
-    // para el algoritmo de corte de caja del servidor.
     await db.execute('''
       CREATE TABLE action_logs (
         id TEXT PRIMARY KEY,
@@ -74,7 +86,6 @@ class DatabaseProvider {
       )
     ''');
 
-    // 3. Tabla: if_then_missions (Modelo de Gollwitzer)
     await db.execute('''
       CREATE TABLE if_then_missions (
         id TEXT PRIMARY KEY,
@@ -84,14 +95,11 @@ class DatabaseProvider {
         created_at TEXT NOT NULL
       )
     ''');
-
-    // Nota de Arquitectura: La tabla 'users' o 'shadow_accounts' la manejaremos
-    // en un script de inicialización independiente para mantener la separación de responsabilidades.
   }
 
-  // Implementa la migración segura
+  // Migraciones Centralizadas
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Migración de Fase 1.5
+    // Migración V1.5 - Hábitos
     if (oldVersion < 2) {
       await db.execute(
         "ALTER TABLE habits ADD COLUMN habit_type TEXT NOT NULL DEFAULT 'standard';",
@@ -105,7 +113,7 @@ class DatabaseProvider {
       );
     }
 
-    // Migración actual: Gatillos Híbridos y Prioridad
+    // Migración V3 - Gatillos Híbridos y Prioridad
     if (oldVersion < 3) {
       await db.execute(
         "ALTER TABLE habits ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'event';",
@@ -117,6 +125,50 @@ class DatabaseProvider {
       await db.execute(
         "ALTER TABLE habits ADD COLUMN priority_level TEXT NOT NULL DEFAULT 'medium';",
       );
+    }
+
+    // Migración V4 - Absorción de las migraciones huérfanas de Auth
+    if (oldVersion < 4) {
+      // Intentamos crear la tabla users por si nunca se inicializó con el script huérfano
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          oauth_id TEXT UNIQUE,
+          xp INTEGER NOT NULL DEFAULT 0,
+          gold_balance INTEGER NOT NULL DEFAULT 0,
+          account_status TEXT NOT NULL DEFAULT 'active'
+        )
+      ''');
+
+      final tableInfo = await db.rawQuery("PRAGMA table_info(users)");
+      final currentColumns = tableInfo
+          .map((col) => col['name'] as String)
+          .toList();
+
+      if (!currentColumns.contains('shields'))
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN shields INTEGER NOT NULL DEFAULT 0;",
+        );
+      if (!currentColumns.contains('is_sleep_mode_active'))
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN is_sleep_mode_active INTEGER NOT NULL DEFAULT 0;",
+        );
+      if (!currentColumns.contains('archetype'))
+        await db.execute("ALTER TABLE users ADD COLUMN archetype TEXT;");
+      if (!currentColumns.contains('primary_vulnerability'))
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN primary_vulnerability TEXT;",
+        );
+      if (!currentColumns.contains('target_sleep_time'))
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN target_sleep_time TEXT NOT NULL DEFAULT '23:00:00';",
+        );
+      if (!currentColumns.contains('day_start_time'))
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN day_start_time TEXT NOT NULL DEFAULT '00:00:00';",
+        );
+      if (!currentColumns.contains('created_at'))
+        await db.execute("ALTER TABLE users ADD COLUMN created_at TEXT;");
     }
   }
 }

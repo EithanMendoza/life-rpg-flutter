@@ -60,4 +60,43 @@ class TrackerUseCases {
       syncStatus: 'pending_undo',
     );
   }
+
+  Future<void> createIfThenMission({
+    required String userId,
+    required String trigger,
+    required String response,
+  }) async {
+    final cleanTrigger = trigger.trim();
+    final cleanResponse = response.trim();
+
+    if (cleanTrigger.isEmpty || cleanResponse.isEmpty) {
+      throw ArgumentError('Campos incompletos');
+    }
+
+    await _repository.insertIfThenMission(
+      const Uuid().v4(),
+      userId,
+      cleanTrigger,
+      cleanResponse,
+    );
+  }
+
+  // --- NUEVAS FUNCIONES DELEGADAS ---
+
+  Future<void> commitAction({required String habitId}) async {
+    await _repository.commitAction(habitId);
+  }
+
+  Future<void> undoAction({required String habitId}) async {
+    await _repository.undoAction(habitId);
+  }
+
+  Future<void> purgeTutorialData(String userId) async {
+    // Aquí es donde en el futuro podrías agregar validaciones extra antes de purgar
+    await _repository.purgeTutorialData(userId);
+  }
+
+  Future<void> completeTutorialStep(String stepId) async {
+    await _repository.completeTutorialStep(stepId);
+  }
 }

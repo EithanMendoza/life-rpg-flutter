@@ -1,9 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 import '../repositories/tracker_local_repository.dart';
 import '../use_cases/tracker_use_cases.dart';
 import '../models/habit_draft_state.dart';
+import 'day_zero_provider.dart';
 
+// 1. INYECCIÓN DE DEPENDENCIAS BASE
 final trackerLocalRepositoryProvider = Provider<TrackerLocalRepository>((ref) {
   return const TrackerLocalRepository();
 });
@@ -13,14 +14,24 @@ final trackerUseCasesProvider = Provider<TrackerUseCases>((ref) {
   return TrackerUseCases(repository);
 });
 
-final habitsProvider = FutureProvider.family<List<Map<String, dynamic>>, String>((ref, userId) async {
-  final repository = ref.read(trackerLocalRepositoryProvider);
-  return repository.getDailyHabits(userId);
-});
+// 2. LECTURA REACTIVA DE DATOS
+final habitsProvider =
+    FutureProvider.family<List<Map<String, dynamic>>, String>((
+      ref,
+      userId,
+    ) async {
+      final repository = ref.read(trackerLocalRepositoryProvider);
+      return repository.getDailyHabits(userId);
+    });
 
-final trackerControllerProvider = AsyncNotifierProvider<TrackerController, void>(() {
-  return TrackerController();
-});
+// ============================================================================
+// 3. CONTROLADOR DE OPERACIONES ASÍNCRONAS (TrackerController)
+// ============================================================================
+
+final trackerControllerProvider =
+    AsyncNotifierProvider<TrackerController, void>(() {
+      return TrackerController();
+    });
 
 class TrackerController extends AsyncNotifier<void> {
   @override
@@ -35,13 +46,15 @@ class TrackerController extends AsyncNotifier<void> {
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      await ref.read(trackerUseCasesProvider).createNewHabit(
-        userId: userId,
-        title: title,
-        anchorEvent: anchorEvent,
-        recurrencePattern: recurrencePattern,
-        isRecovery: isRecovery,
-      );
+      await ref
+          .read(trackerUseCasesProvider)
+          .createNewHabit(
+            userId: userId,
+            title: title,
+            anchorEvent: anchorEvent,
+            recurrencePattern: recurrencePattern,
+            isRecovery: isRecovery,
+          );
       ref.invalidate(habitsProvider(userId));
     });
   }
@@ -53,39 +66,79 @@ class TrackerController extends AsyncNotifier<void> {
   }) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      await ref.read(trackerUseCasesProvider).logAction(
-        userId: userId,
-        actionType: actionType,
-        timezoneOffset: timezoneOffset,
-      );
+      await ref
+          .read(trackerUseCasesProvider)
+          .logAction(
+            userId: userId,
+            actionType: actionType,
+            timezoneOffset: timezoneOffset,
+          );
     });
+  }
+
+  Future<void> injectTutorialDamage(String userId) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final timezoneOffset = DateTime.now().timeZoneOffset.inHours;
+      await ref
+          .read(trackerUseCasesProvider)
+          .logAction(
+            userId: userId,
+            actionType: 'tutorial_hp_loss',
+            timezoneOffset: timezoneOffset,
+          );
+    });
+  }
+
+  Future<void> purgeTutorialAndTransition({required String userId}) async {
+    state = const AsyncValue.loading();
+    try {
+      // 🛡️ Llamamos directamente al Repositorio para asegurar que el borrado físico
+      // ocurra sin depender de un Caso de Uso que podría estar incompleto.
+      await ref.read(trackerLocalRepositoryProvider).purgeTutorialData(userId);
+
+      // Invalidamos el estado para que la pantalla principal se recargue
+      ref.invalidate(dayZeroProvider);
+      state = const AsyncValue.data(null);
+    } catch (error, stackTrace) {
+      print(
+        '❌ [TrackerController] Error crítico al purgar el tutorial: $error',
+      );
+      state = AsyncValue.error(error, stackTrace);
+    }
   }
 
   Future<void> commitAction({required String habitId}) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      final repository = ref.read(trackerLocalRepositoryProvider);
-      await repository.commitAction(habitId);
+      // ✅ CORRECCIÓN
+      await ref.read(trackerUseCasesProvider).commitAction(habitId: habitId);
     });
   }
 
   Future<void> undoAction({required String habitId}) async {
     state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
-      final repository = ref.read(trackerLocalRepositoryProvider);
-      await repository.undoAction(habitId);
+      // ✅ CORRECCIÓN
+      await ref.read(trackerUseCasesProvider).undoAction(habitId: habitId);
     });
   }
 }
 
-final habitDraftControllerProvider = StateNotifierProvider.autoDispose<HabitDraftController, HabitDraftState>((ref) {
-  return HabitDraftController(ref);
-});
+// ============================================================================
+// 4. CONTROLADOR DE ESTADO EN MEMORIA (HabitDraftController - Riverpod 3.x)
+// ============================================================================
 
-class HabitDraftController extends StateNotifier<HabitDraftState> {
-  final Ref ref;
+final habitDraftControllerProvider =
+    NotifierProvider.autoDispose<HabitDraftController, HabitDraftState>(
+      HabitDraftController.new,
+    );
 
-  HabitDraftController(this.ref) : super(const HabitDraftState());
+class HabitDraftController extends Notifier<HabitDraftState> {
+  @override
+  HabitDraftState build() {
+    return const HabitDraftState();
+  }
 
   void updateTitle(String title) {
     state = state.copyWith(title: title);
@@ -119,45 +172,46 @@ class HabitDraftController extends StateNotifier<HabitDraftState> {
     state = state.copyWith(recurrencePattern: pattern);
   }
 
-  Future<bool> saveHabit(String userId) async {
+  Future<bool> saveHabit(
+    String userId, {
+    String? tutorialStepIdToRemove,
+  }) async {
     if (state.title.trim().isEmpty) return false;
-    if (state.triggerType == 'event' && (state.anchorEvent == null || state.anchorEvent!.trim().isEmpty)) return false;
-    if (state.triggerType == 'time' && (state.triggerTime == null || state.triggerTime!.trim().isEmpty)) return false;
+    if (state.triggerType == 'event' &&
+        (state.anchorEvent == null || state.anchorEvent!.trim().isEmpty)) {
+      return false;
+    }
+    if (state.triggerType == 'time' &&
+        (state.triggerTime == null || state.triggerTime!.trim().isEmpty)) {
+      return false;
+    }
 
     try {
-      await ref.read(trackerUseCasesProvider).createNewHabit(
-        userId: userId,
-        title: state.title,
-        triggerType: state.triggerType,
-        anchorEvent: state.anchorEvent,
-        triggerTime: state.triggerTime,
-        durationMinutes: state.durationMinutes,
-        priorityLevel: state.priorityLevel,
-        recurrencePattern: state.recurrencePattern,
-        isRecovery: false,
-      );
+      await ref
+          .read(trackerUseCasesProvider)
+          .createNewHabit(
+            userId: userId,
+            title: state.title,
+            triggerType: state.triggerType,
+            anchorEvent: state.anchorEvent,
+            triggerTime: state.triggerTime,
+            durationMinutes: state.durationMinutes,
+            priorityLevel: state.priorityLevel,
+            recurrencePattern: state.recurrencePattern,
+            isRecovery: false,
+          );
+
+      if (tutorialStepIdToRemove != null) {
+        await ref
+            .read(trackerUseCasesProvider)
+            .completeTutorialStep(tutorialStepIdToRemove);
+        ref.invalidate(dayZeroProvider);
+      }
+
       ref.invalidate(habitsProvider(userId));
       return true;
     } catch (_) {
       return false;
-    }
-  }
-
-  Future<void> commitAction({required String habitId}) async {
-    try {
-      final repository = ref.read(trackerLocalRepositoryProvider);
-      await repository.commitAction(habitId);
-    } catch (e) {
-      // Ignore
-    }
-  }
-
-  Future<void> undoAction({required String habitId}) async {
-    try {
-      final repository = ref.read(trackerLocalRepositoryProvider);
-      await repository.undoAction(habitId);
-    } catch (e) {
-      // Ignore
     }
   }
 }

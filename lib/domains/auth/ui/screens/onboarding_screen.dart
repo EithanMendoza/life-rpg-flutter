@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/ui/app_shell.dart';
+import '../../../../core/providers/session_provider.dart';
 
 // Importamos los widgets visuales puros y el controlador
 import '../widgets/archetype_selector_widget.dart';
@@ -18,6 +19,7 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final PageController _pageController = PageController();
+  bool _isLoading = false; // Estado local para proteger la transacción SQL
 
   @override
   void dispose() {
@@ -32,15 +34,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  void _finishOnboarding() {
-    // TODO: Fase 2 - Invocar caso de uso de inserción masiva en SQLite
-    // Aquí el estado ya tiene los 3 valores completos en ref.read(authDraftProvider)
-
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (context) => const AppShell()),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final draftController = ref.read(authDraftProvider.notifier);
@@ -50,47 +43,67 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
-          child: PageView(
-            controller: _pageController,
-            physics:
-                const NeverScrollableScrollPhysics(), // Evita que el usuario deslice sin responder
+          child: Stack(
             children: [
-              // PASO 1: Bienvenida Original
-              _buildWelcomeStep(),
+              PageView(
+                controller: _pageController,
+                physics: const NeverScrollableScrollPhysics(),
+                children: [
+                  _buildWelcomeStep(),
 
-              // PASO 2: Identidad
-              ArchetypeSelectorWidget(
-                onSelected: (val) {
-                  draftController.setArchetype(val);
-                  _nextPage();
-                },
+                  ArchetypeSelectorWidget(
+                    onSelected: (val) {
+                      draftController.setArchetype(val);
+                      _nextPage();
+                    },
+                  ),
+
+                  ChronobiologySelectorWidget(
+                    // Ya no recibe 'val', solo avanza la página
+                    onSelected: () => _nextPage(),
+                  ),
+
+                  VulnerabilitySelectorWidget(
+                    onSelected: (val) async {
+                      setState(() => _isLoading = true);
+
+                      draftController.setVulnerability(val);
+                      final success = await draftController.finalizeContract();
+
+                      if (!context.mounted) return;
+
+                      if (success) {
+                        ref.invalidate(localUserIdProvider);
+
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(
+                            builder: (context) => const AppShell(),
+                          ),
+                        );
+                      } else {
+                        setState(() => _isLoading = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Error al crear el contrato clínico. Inténtalo de nuevo.',
+                            ),
+                            backgroundColor: Colors.redAccent,
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ],
               ),
 
-              // PASO 3: Cronobiología
-              ChronobiologySelectorWidget(
-                onSelected: (val) {
-                  draftController.setSleepTime(val);
-                  _nextPage();
-                },
-              ),
-
-              // PASO 4: Vulnerabilidad y Cierre
-              VulnerabilitySelectorWidget(
-                onSelected: (val) async {
-                  draftController.setVulnerability(val);
-
-                  // Invocamos la orquestación atómica
-                  final success = await draftController.finalizeContract();
-
-                  if (success && context.mounted) {
-                    // Redirección al núcleo de la app.
-                    // TrackerScreen ocultará los cronómetros evaluando la antigüedad de la cuenta.
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(builder: (context) => const AppShell()),
-                    );
-                  }
-                },
-              ),
+              // Capa de carga sobrepuesta
+              if (_isLoading)
+                Container(
+                  color: Colors.black.withOpacity(0.5),
+                  child: const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  ),
+                ),
             ],
           ),
         ),

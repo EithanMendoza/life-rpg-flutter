@@ -1,27 +1,43 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../models/user.dart';
 import '../repositories/auth_local_repository.dart';
 import '../../tracker/use_cases/prescribe_odysseus_contract_use_case.dart';
 
+// 1. INYECCIÓN DE DEPENDENCIAS
+final authLocalRepositoryProvider = Provider<AuthLocalRepository>((ref) {
+  return AuthLocalRepository();
+});
+
+final prescribeContractUseCaseProvider =
+    Provider<PrescribeOdysseusContractUseCase>((ref) {
+      return PrescribeOdysseusContractUseCase();
+    });
+
+// 2. ESTADO INMUTABLE (Ahora con TimeOfDay para cálculos precisos)
 class AuthDraftState {
   final String? selectedArchetype;
-  final String? targetSleepTime;
+  final TimeOfDay? dayStartTime;
+  final TimeOfDay? targetSleepTime;
   final String? selectedVulnerability;
 
   const AuthDraftState({
     this.selectedArchetype,
+    this.dayStartTime,
     this.targetSleepTime,
     this.selectedVulnerability,
   });
 
   AuthDraftState copyWith({
     String? selectedArchetype,
-    String? targetSleepTime,
+    TimeOfDay? dayStartTime,
+    TimeOfDay? targetSleepTime,
     String? selectedVulnerability,
   }) {
     return AuthDraftState(
       selectedArchetype: selectedArchetype ?? this.selectedArchetype,
+      dayStartTime: dayStartTime ?? this.dayStartTime,
       targetSleepTime: targetSleepTime ?? this.targetSleepTime,
       selectedVulnerability:
           selectedVulnerability ?? this.selectedVulnerability,
@@ -29,6 +45,7 @@ class AuthDraftState {
   }
 }
 
+// 3. CONTROLADOR Y LÓGICA DE NEGOCIO
 class AuthDraftController extends Notifier<AuthDraftState> {
   @override
   AuthDraftState build() {
@@ -39,7 +56,11 @@ class AuthDraftController extends Notifier<AuthDraftState> {
     state = state.copyWith(selectedArchetype: archetype);
   }
 
-  void setSleepTime(String time) {
+  void setDayStartTime(TimeOfDay time) {
+    state = state.copyWith(dayStartTime: time);
+  }
+
+  void setTargetSleepTime(TimeOfDay time) {
     state = state.copyWith(targetSleepTime: time);
   }
 
@@ -47,12 +68,38 @@ class AuthDraftController extends Notifier<AuthDraftState> {
     state = state.copyWith(selectedVulnerability: vulnerability);
   }
 
-  /// Orquestador Final del Contrato de Odiseo
+  // --- MOTOR PSICOLÓGICO: Cálculo de Privación de Sueño ---
+  bool isSleepDeprived() {
+    if (state.dayStartTime == null || state.targetSleepTime == null)
+      return false;
+
+    // Calculamos la diferencia en minutos cruzando la medianoche
+    int sleepMinutes =
+        (state.dayStartTime!.hour * 60 + state.dayStartTime!.minute) -
+        (state.targetSleepTime!.hour * 60 + state.targetSleepTime!.minute);
+
+    if (sleepMinutes <= 0) {
+      sleepMinutes +=
+          24 *
+          60; // Ajuste si cruza la medianoche (ej. duerme 23:00, despierta 06:00)
+    }
+
+    return sleepMinutes < (6 * 60); // Menos de 6 horas (360 minutos)
+  }
+
+  // Helper para convertir TimeOfDay a String SQL (HH:MM:SS)
+  String _formatTimeOfDay(TimeOfDay time) {
+    final h = time.hour.toString().padLeft(2, '0');
+    final m = time.minute.toString().padLeft(2, '0');
+    return '$h:$m:00';
+  }
+
   Future<bool> finalizeContract() async {
     if (state.selectedArchetype == null ||
+        state.dayStartTime == null ||
         state.targetSleepTime == null ||
         state.selectedVulnerability == null) {
-      return false; // Evita inyecciones incompletas
+      return false;
     }
 
     try {
@@ -60,42 +107,35 @@ class AuthDraftController extends Notifier<AuthDraftState> {
       final shadowAccountId = uuid.v4();
       final nowUtc = DateTime.now().toUtc().toIso8601String();
 
-      // Paso A: Crear entidad del usuario
       final newUser = User(
         id: shadowAccountId,
-        dayStartTime: '00:00:00', // Offset por defecto
-        targetSleepTime: state.targetSleepTime!,
+        dayStartTime: _formatTimeOfDay(state.dayStartTime!),
+        targetSleepTime: _formatTimeOfDay(state.targetSleepTime!),
         archetype: state.selectedArchetype!,
         primaryVulnerability: state.selectedVulnerability!,
         createdAt: nowUtc,
       );
 
-      // Paso B: Invocar el Use Case de Diagnóstico
-      final useCase = PrescribeOdysseusContractUseCase();
+      final useCase = ref.read(prescribeContractUseCaseProvider);
+      final repository = ref.read(authLocalRepositoryProvider);
+
       final contract = useCase.execute(
         userId: shadowAccountId,
         archetype: state.selectedArchetype!,
         vulnerability: state.selectedVulnerability!,
-        targetSleepTime: state.targetSleepTime!,
+        targetSleepTime: _formatTimeOfDay(state.targetSleepTime!),
       );
 
-      // Paso C: Ejecutar la Transacción SQL
-      final repository = AuthLocalRepository();
       await repository.createShadowAccountWithContract(newUser, contract);
 
-      // Limpieza de memoria
       state = const AuthDraftState();
-
       return true;
     } catch (e) {
-      // Capturar y reportar el error (Crashlytics)
       return false;
     }
   }
 }
 
 final authDraftProvider = NotifierProvider<AuthDraftController, AuthDraftState>(
-  () {
-    return AuthDraftController();
-  },
+  () => AuthDraftController(),
 );

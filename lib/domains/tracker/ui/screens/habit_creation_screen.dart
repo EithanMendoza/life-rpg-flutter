@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/providers/session_provider.dart';
 import '../../providers/tracker_provider.dart';
 import '../widgets/trigger_section.dart';
 import '../widgets/friction_section.dart';
@@ -7,7 +8,10 @@ import '../widgets/recurrence_section.dart';
 import '../widgets/priority_section.dart';
 
 class HabitCreationScreen extends ConsumerStatefulWidget {
-  const HabitCreationScreen({super.key});
+  /// Si viene del Día Cero, contiene el ID del paso a eliminar tras guardar.
+  final String? tutorialStepIdToRemove;
+
+  const HabitCreationScreen({super.key, this.tutorialStepIdToRemove});
 
   @override
   ConsumerState<HabitCreationScreen> createState() =>
@@ -49,8 +53,20 @@ class _HabitCreationScreenState extends ConsumerState<HabitCreationScreen> {
   }
 
   Future<void> _saveHabit(BuildContext context) async {
+    // Obtenemos el ID real (al ser un FutureProvider, usamos .value o validamos)
+    final userId = ref.read(localUserIdProvider).value;
+
+    if (userId == null) {
+      // Manejar el caso de que no haya sesión
+      return;
+    }
+
     final notifier = ref.read(habitDraftControllerProvider.notifier);
-    final success = await notifier.saveHabit('shadow-account-id');
+    final success = await notifier.saveHabit(
+      userId, // ¡Adiós al hardcoding!
+      tutorialStepIdToRemove: widget.tutorialStepIdToRemove,
+    );
+    // ... resto de tu código ...
 
     if (!context.mounted) return;
 

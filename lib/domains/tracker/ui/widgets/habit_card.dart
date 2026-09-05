@@ -3,14 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../providers/tracker_provider.dart';
+import '../../../../core/providers/session_provider.dart'; // Tu puente de identidad
 
 class HabitCard extends ConsumerStatefulWidget {
   final String id;
   final String title;
   final int baseXp;
   final bool isCompleted;
-  final String? syncStatus; // NUEVO: Extraído del repositorio
-  final String? clientTimestamp; // NUEVO: Para calcular el OOM Killer delta
+  final String? syncStatus;
+  final String? clientTimestamp;
 
   const HabitCard({
     super.key,
@@ -60,7 +61,6 @@ class _HabitCardState extends ConsumerState<HabitCard> {
         });
         _startTimer();
       } else {
-        // CORRECCIÓN: Postergamos la mutación del estado hasta que el widget termine de construirse
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _finalizeCommit();
         });
@@ -86,20 +86,28 @@ class _HabitCardState extends ConsumerState<HabitCard> {
   }
 
   Future<void> _finalizeCommit() async {
-    // Llama al repositorio para actualizar el estado a 'pending' o 'synced'
+    final userId = ref.read(localUserIdProvider).value;
+    if (userId == null) return;
+
     await ref
         .read(trackerControllerProvider.notifier)
         .commitAction(habitId: widget.id);
-    ref.invalidate(habitsProvider('local_user'));
+
+    // Invalida la lista del usuario REAL
+    ref.invalidate(habitsProvider(userId));
   }
 
   Future<void> _undoAction() async {
     _timer?.cancel();
-    // Ejecuta el borrado físico en SQLite
+    final userId = ref.read(localUserIdProvider).value;
+    if (userId == null) return;
+
     await ref
         .read(trackerControllerProvider.notifier)
         .undoAction(habitId: widget.id);
-    ref.invalidate(habitsProvider('local_user'));
+
+    // Invalida la lista del usuario REAL
+    ref.invalidate(habitsProvider(userId));
   }
 
   @override
@@ -126,13 +134,9 @@ class _HabitCardState extends ConsumerState<HabitCard> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isPendingUndo
-              ? AppColors.warning.withOpacity(
-                  0.5,
-                ) // Borde amarillo para Soft-Commit
+              ? AppColors.warning.withOpacity(0.5)
               : isFullyCompleted
-              ? AppColors.primary.withOpacity(
-                  0.5,
-                ) // Borde verde para definitivo
+              ? AppColors.primary.withOpacity(0.5)
               : Colors.transparent,
           width: 1.5,
         ),
@@ -148,18 +152,24 @@ class _HabitCardState extends ConsumerState<HabitCard> {
               onTap: () async {
                 if (widget.isCompleted || isPendingUndo) return;
 
+                // 1. Buscamos al usuario real
+                final userId = ref.read(localUserIdProvider).value;
+                if (userId == null) return;
+
                 final int timezoneOffset =
                     DateTime.now().timeZoneOffset.inMinutes;
 
+                // 2. Disparamos el evento real
                 await ref
                     .read(trackerControllerProvider.notifier)
                     .registerAction(
-                      userId: 'shadow-account-id',
+                      userId: userId, // ¡Adiós 'shadow-account-id'!
                       actionType: 'habit_completed:${widget.id}',
                       timezoneOffset: timezoneOffset,
                     );
 
-                ref.invalidate(habitsProvider('shadow-account-id'));
+                // 3. Refrescamos la UI real
+                ref.invalidate(habitsProvider(userId));
               },
               borderRadius: BorderRadius.circular(24),
               child: Padding(
@@ -236,7 +246,7 @@ class _HabitCardState extends ConsumerState<HabitCard> {
             ),
           ),
 
-          // BARRA INFERIOR DE DESHACER (Visible solo en Soft-Commit)
+          // BARRA INFERIOR DE DESHACER
           if (isPendingUndo)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

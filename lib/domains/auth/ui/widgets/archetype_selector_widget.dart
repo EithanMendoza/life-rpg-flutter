@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../../core/theme/app_colors.dart';
 
 class ArchetypeSelectorWidget extends StatelessWidget {
   final Function(String) onSelected;
@@ -8,64 +7,108 @@ class ArchetypeSelectorWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Text(
-          'Pilar de Identidad',
+          '¿Qué quieres cambiar primero?',
           style: TextStyle(
-            fontSize: 24,
+            fontSize: 26,
             fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
+            letterSpacing: -0.5,
           ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          '¿Qué arquetipo define tu objetivo actual?',
           textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.textSecondary),
         ),
-        const SizedBox(height: 48),
-        _buildOption(
-          'Guerrero',
-          'Fuerza y Resistencia',
-          Icons.fitness_center,
-          context,
+        const SizedBox(height: 40),
+
+        _buildIdentityCard(
+          context: context,
+          id: 'vital',
+          title: 'El Vital',
+          subtitle: 'Quiero mejorar mi salud, energía y descanso.',
+          icon: Icons.favorite_border,
         ),
-        _buildOption(
-          'Erudito',
-          'Conocimiento y Enfoque',
-          Icons.menu_book,
-          context,
+        _buildIdentityCard(
+          context: context,
+          id: 'scholar',
+          title: 'El Erudito',
+          subtitle: 'Quiero estudiar, leer más y dejar las pantallas.',
+          icon: Icons.menu_book,
         ),
-        _buildOption('Alquimista', 'Creación y Código', Icons.code, context),
+        _buildIdentityCard(
+          context: context,
+          id: 'architect',
+          title: 'El Arquitecto',
+          subtitle: 'Quiero organizar mis proyectos y mi dinero.',
+          icon: Icons.architecture,
+        ),
+        _buildIdentityCard(
+          context: context,
+          id: 'explorer',
+          title: 'El Explorador',
+          subtitle: 'Quiero empezar desde cero, a mi ritmo.',
+          icon: Icons.explore_outlined,
+        ),
       ],
     );
   }
 
-  Widget _buildOption(
-    String id,
-    String desc,
-    IconData icon,
-    BuildContext context,
-  ) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      color: AppColors.surface,
-      child: ListTile(
-        leading: Icon(icon, color: AppColors.primary),
-        title: Text(
-          id,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            color: AppColors.textPrimary,
+  Widget _buildIdentityCard({
+    required BuildContext context,
+    required String id,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16.0),
+      child: InkWell(
+        onTap: () => onSelected(id), // Avanza automáticamente al tocar
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            border: Border.all(
+              color: theme.colorScheme.outline.withOpacity(0.2),
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 32, color: theme.colorScheme.primary),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: theme.colorScheme.onSurface.withOpacity(0.7),
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        subtitle: Text(
-          desc,
-          style: const TextStyle(color: AppColors.textSecondary),
-        ),
-        onTap: () => onSelected(id.toLowerCase()),
       ),
     );
   }

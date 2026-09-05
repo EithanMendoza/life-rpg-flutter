@@ -30,6 +30,8 @@ class TrackerLocalRepository {
   /// Obtiene los hábitos del día.
   /// Utiliza subconsultas para garantizar EXACTAMENTE 1 fila por hábito,
   /// extrayendo solo el último registro del action_log para el temporizador.
+  /// Obtiene los hábitos del día.
+  /// Filtra explícitamente los pasos del tutorial para que no contaminen el dashboard real.
   Future<List<Map<String, dynamic>>> getDailyHabits(String userId) async {
     final db = await DatabaseProvider.db.database;
 
@@ -67,7 +69,7 @@ class TrackerLocalRepository {
         ) as log_timestamp
         
       FROM habits h
-      WHERE h.user_id = ? AND h.is_active = 1
+      WHERE h.user_id = ? AND h.is_active = 1 AND h.habit_type != 'tutorial_step'
       ORDER BY h.created_at DESC
     ''',
       [userId],
@@ -121,5 +123,75 @@ class TrackerLocalRepository {
       where: 'action_type = ? AND sync_status = ?',
       whereArgs: ['habit_completed:$habitId', 'pending_undo'],
     );
+  }
+
+  /// Consulta específica para la "Lista de Iniciación" del Día Cero.
+  /// Filtra estrictamente por habit_type = 'tutorial_step'.
+  Future<List<Map<String, dynamic>>> getTutorialSteps(String userId) async {
+    final db = await DatabaseProvider.db.database;
+
+    final List<Map<String, dynamic>> results = await db.rawQuery(
+      '''
+      SELECT *
+      FROM habits 
+      WHERE user_id = ? 
+        AND is_active = 1 
+        AND habit_type = 'tutorial_step'
+      ORDER BY created_at ASC
+    ''',
+      [userId],
+    );
+
+    return results;
+  }
+
+  /// Ejecuta un borrado físico (Hard Delete) de un paso del tutorial.
+  /// Cumple con la directiva de limpieza del Día Cero (ADR-005).
+  /// La doble condición (id + habit_type) protege de borrar hábitos reales.
+  Future<void> completeTutorialStep(String stepId) async {
+    final db = await DatabaseProvider.db.database;
+    await db.delete(
+      'habits',
+      where: 'id = ? AND habit_type = ?',
+      whereArgs: [stepId, 'tutorial_step'],
+    );
+  }
+
+  /// Ejecuta el purgado absoluto del tutorial mediante una transacción atómica.
+  /// Cumple con la directiva de limpieza del Día Cero (ADR-005).
+  Future<void> purgeTutorialData(String userId) async {
+    final db = await DatabaseProvider.db.database;
+
+    await db.transaction((txn) async {
+      // 1. Elimina físicamente el log de daño simulado
+      await txn.delete(
+        'action_logs',
+        where: 'user_id = ? AND action_type = ?',
+        whereArgs: [userId, 'tutorial_hp_loss'],
+      );
+
+      // 2. Elimina físicamente TODOS los hábitos de iniciación restantes
+      await txn.delete(
+        'habits',
+        where: 'user_id = ? AND habit_type = ?',
+        whereArgs: [userId, 'tutorial_step'],
+      );
+    });
+  }
+
+  Future<void> insertIfThenMission(
+    String id,
+    String userId,
+    String trigger,
+    String response,
+  ) async {
+    final db = await DatabaseProvider.db.database;
+    await db.insert('if_then_missions', {
+      'id': id,
+      'user_id': userId,
+      'trigger_condition': trigger,
+      'action_response': response,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }
